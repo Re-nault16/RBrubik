@@ -1,0 +1,5 @@
+RBrubik
+rbrubik
+*.o
+*.pkg.tar.*
+pkg/
