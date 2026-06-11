@@ -17,6 +17,8 @@ It is designed for Arch ARM on aarch64, but it also works on Linux x86_64. It on
 ## Installation
 
 ```sh
+git clone https://github.com/Re-nault16/RBrubik.git
+cd RBrubik
 make
 sudo make install
 ```
