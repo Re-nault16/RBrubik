@@ -1,5 +1,5 @@
-<img width="853" height="510" alt="Screenshot 2026-06-12 alle 02 01 56" src="https://github.com/user-attachments/assets/a582b828-58cd-4f51-8305-3e09deb160e4" />
-<img width="846" height="509" alt="Screenshot 2026-06-12 alle 02 02 23" src="https://github.com/user-attachments/assets/cdd3a872-3599-4f27-8da9-a10ba35f7fa4" />
+<img width="800" height="478" alt="ezgif-32f1f26acbf32a0a" src="https://github.com/user-attachments/assets/91c02c67-3f0f-4435-8fb9-e493154ade03" />
+<img width="800" height="478" alt="ezgif-36cdf3f9a2a6db8e" src="https://github.com/user-attachments/assets/9be7cb31-8795-4d26-aa06-d49788eb4e7d" />
 
 # RBrubik
 
