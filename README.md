@@ -11,6 +11,12 @@ The renderer uses a centered canvas with a fixed maximum size: large terminal wi
 
 It is designed for Arch ARM on aarch64, but it also works on Linux x86_64. It only requires a C compiler, `make`, and a terminal with truecolor and Unicode support.
 
+## Latest Release
+
+**v0.0.2 - HotFix**
+
+This release fixes intermittent terminal rendering glitches where parts of the cube could appear shifted or leave visual artifacts during animation.
+
 ## Requirements
 
 - C99-compatible C compiler, such as `gcc` or `clang`
