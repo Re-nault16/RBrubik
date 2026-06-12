@@ -13,9 +13,9 @@ It is designed for Arch ARM on aarch64, but it also works on Linux x86_64. It on
 
 ## Latest Release
 
-**v0.0.2 - HotFix**
+**v0.0.3 - Palette switch**
 
-This release fixes intermittent terminal rendering glitches where parts of the cube could appear shifted or leave visual artifacts during animation.
+This release adds a palette switcher. Press `p` to alternate between the classic cube colors and a pastel palette with white sticker borders. The renderer keeps the v0.0.2 hotfix and limits redraws to the active cube rows to avoid palette-switch artifacts.
 
 ## Requirements
 
@@ -43,6 +43,7 @@ RBrubik
 ## Controls
 
 - `q`: quit
+- `p`: change palette
 - `Ctrl-C`: quit
 
 To uninstall it:

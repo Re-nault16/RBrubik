@@ -32,6 +32,12 @@ typedef struct {
 } Color;
 
 typedef struct {
+    const char *name;
+    Color stickers[6];
+    Color gap;
+} Palette;
+
+typedef struct {
     float x;
     float y;
     float z;
@@ -53,17 +59,35 @@ static volatile sig_atomic_t running = 1;
 static struct termios original_termios;
 static int original_flags = -1;
 static bool terminal_configured = false;
+static const Palette *current_palette = NULL;
 
-static const Color face_colors[6] = {
-    {230, 30, 42},
-    {255, 126, 0},
-    {0, 82, 180},
-    {0, 155, 72},
-    {255, 213, 0},
-    {245, 245, 245},
+static const Palette palettes[] = {
+    {
+        "classic",
+        {
+            {230, 30, 42},
+            {255, 126, 0},
+            {0, 82, 180},
+            {0, 155, 72},
+            {255, 213, 0},
+            {245, 245, 245},
+        },
+        {18, 18, 18},
+    },
+    {
+        "pastel",
+        {
+            {253, 230, 138},
+            {248, 250, 252},
+            {134, 239, 172},
+            {147, 197, 253},
+            {249, 168, 212},
+            {253, 186, 116},
+        },
+        {255, 255, 255},
+    },
 };
 
-static const Color gap_color = {18, 18, 18};
 static const Color bg_color = {0, 0, 0};
 
 static const int scrambled_stickers[6][9] = {
@@ -204,6 +228,14 @@ static Color mix_color(Color a, Color b, float amount) {
     return out;
 }
 
+static void next_palette(void) {
+    if (current_palette == &palettes[0]) {
+        current_palette = &palettes[1];
+    } else {
+        current_palette = &palettes[0];
+    }
+}
+
 static bool is_gap(float u, float v) {
     const float divisions[2] = {-1.0f / 3.0f, 1.0f / 3.0f};
 
@@ -255,10 +287,10 @@ static float scramble_amount(float t, int face, int sticker) {
     return smoothstep(amount);
 }
 
-static Color sticker_color(int face, float u, float v, float t) {
+static Color sticker_color(const Palette *palette, int face, float u, float v, float t) {
     int sticker = sticker_index(u, v);
-    Color solved = face_colors[face];
-    Color scrambled = face_colors[scrambled_stickers[face][sticker]];
+    Color solved = palette->stickers[face];
+    Color scrambled = palette->stickers[scrambled_stickers[face][sticker]];
     float amount = scramble_amount(t, face, sticker);
     float transition = 4.0f * amount * (1.0f - amount);
     float shimmer = 0.08f * transition * sinf(t * 7.2f + (float)(face * 13 + sticker * 5));
@@ -307,6 +339,7 @@ static void plot(Pixel *buffer, int width, int height, int x, int y, float depth
 }
 
 static void render_cube(Pixel *buffer, int width, int height, float t) {
+    const Palette *palette = current_palette;
     float ax = 0.55f + sinf(t * 0.37f) * 0.16f;
     float ay = t * 0.92f;
     float az = t * 0.31f;
@@ -323,7 +356,7 @@ static void render_cube(Pixel *buffer, int width, int height, float t) {
                 float projected_z = rotated.z + CAMERA_DISTANCE;
                 int screen_x;
                 int screen_y;
-                Color color = is_gap(u, v) ? gap_color : sticker_color(face, u, v, t);
+                Color color = is_gap(u, v) ? palette->gap : sticker_color(palette, face, u, v, t);
 
                 if (projected_z <= 0.1f) {
                     continue;
@@ -432,6 +465,14 @@ static void draw_frame(const Pixel *buffer, int width, int height, int terminal_
     int available_rows = terminal_rows > 1 ? terminal_rows - 1 : terminal_rows;
     int x_offset = (terminal_width - width) / 2;
     int y_offset = (available_rows - frame_rows) / 2;
+    int status_width = terminal_width > 0 ? terminal_width - 1 : 0;
+    int current_first_row = terminal_rows;
+    int current_last_row = 0;
+    int draw_first_row;
+    int draw_last_row;
+    static int previous_first_row = 0;
+    static int previous_last_row = 0;
+    char status[128];
     OutputBuffer out = {0};
     float phase = fmodf(animation_time(t), CYCLE_SECONDS);
     const char *mode = t < STARTUP_SOLVED_SECONDS ? "solved" :
@@ -445,31 +486,72 @@ static void draw_frame(const Pixel *buffer, int width, int height, int terminal_
     }
 
     for (int y = 0; y < height; y += 2) {
-        bool has_fg = false;
-        bool has_bg = false;
-        Color current_fg = {0, 0, 0};
-        Color current_bg = {0, 0, 0};
+        bool row_filled = false;
+        int terminal_row = y_offset + (y / 2) + 1;
 
-        if (!append_output(&out, "\033[%d;%dH", y_offset + (y / 2) + 1, x_offset + 1)) {
+        for (int x = 0; x < width; x++) {
+            const Pixel *upper = &buffer[y * width + x];
+            const Pixel *lower = y + 1 < height ? &buffer[(y + 1) * width + x] : NULL;
+
+            if (upper->filled || (lower != NULL && lower->filled)) {
+                row_filled = true;
+                break;
+            }
+        }
+
+        if (row_filled) {
+            if (terminal_row < current_first_row) {
+                current_first_row = terminal_row;
+            }
+            if (terminal_row > current_last_row) {
+                current_last_row = terminal_row;
+            }
+        }
+    }
+
+    if (current_last_row == 0) {
+        current_first_row = y_offset + 1;
+        current_last_row = current_first_row;
+    }
+
+    draw_first_row = current_first_row;
+    draw_last_row = current_last_row;
+    if (previous_last_row != 0) {
+        if (previous_first_row < draw_first_row) {
+            draw_first_row = previous_first_row;
+        }
+        if (previous_last_row > draw_last_row) {
+            draw_last_row = previous_last_row;
+        }
+    }
+
+    for (int terminal_row = draw_first_row; terminal_row <= draw_last_row; terminal_row++) {
+        int y = (terminal_row - y_offset - 1) * 2;
+        bool has_fg = false;
+        bool has_bg = true;
+        Color current_fg = {0, 0, 0};
+        Color current_bg = bg_color;
+
+        if (!append_output(&out, "\033[%d;%dH\033[40m", terminal_row, x_offset + 1)) {
             free(out.data);
             return;
         }
 
         for (int x = 0; x < width; x++) {
-            const Pixel *upper = &buffer[y * width + x];
-            const Pixel *lower = y + 1 < height ? &buffer[(y + 1) * width + x] : NULL;
+            const Pixel empty = {0};
+            const Pixel *upper = y >= 0 && y < height ? &buffer[y * width + x] : &empty;
+            const Pixel *lower = y >= 0 && y + 1 < height ? &buffer[(y + 1) * width + x] : NULL;
             bool has_upper = upper->filled;
             bool has_lower = lower != NULL && lower->filled;
             Color fg = {0, 0, 0};
-            Color bg = {0, 0, 0};
+            Color bg = bg_color;
             bool needs_fg = false;
-            bool needs_bg = false;
+            bool needs_bg = true;
             const char *glyph = " ";
 
             if (has_upper && has_lower) {
                 bg = upper->color;
                 fg = lower->color;
-                needs_bg = true;
                 needs_fg = true;
                 glyph = "▄";
             } else if (has_upper) {
@@ -482,40 +564,29 @@ static void draw_frame(const Pixel *buffer, int width, int height, int terminal_
                 glyph = "▄";
             }
 
-            if (!needs_fg && !needs_bg) {
-                if ((has_fg || has_bg) && !append_literal(&out, "\033[0m")) {
+            if (needs_bg && (!has_bg || !same_color(current_bg, bg))) {
+                if (same_color(bg, bg_color)) {
+                    if (!append_literal(&out, "\033[40m")) {
+                        free(out.data);
+                        return;
+                    }
+                } else {
+                    if (!append_output(&out, "\033[48;2;%u;%u;%um", bg.r, bg.g, bg.b)) {
+                        free(out.data);
+                        return;
+                    }
+                }
+                current_bg = bg;
+                has_bg = true;
+            }
+
+            if (needs_fg && (!has_fg || !same_color(current_fg, fg))) {
+                if (!append_output(&out, "\033[38;2;%u;%u;%um", fg.r, fg.g, fg.b)) {
                     free(out.data);
                     return;
                 }
-                has_fg = false;
-                has_bg = false;
-            } else {
-                if (needs_bg) {
-                    if (!has_bg || !same_color(current_bg, bg)) {
-                        if (!append_output(&out, "\033[48;2;%u;%u;%um",
-                                           bg.r, bg.g, bg.b)) {
-                            free(out.data);
-                            return;
-                        }
-                        current_bg = bg;
-                        has_bg = true;
-                    }
-                } else if (has_bg) {
-                    if (!append_literal(&out, "\033[49m")) {
-                        free(out.data);
-                        return;
-                    }
-                    has_bg = false;
-                }
-
-                if (needs_fg && (!has_fg || !same_color(current_fg, fg))) {
-                    if (!append_output(&out, "\033[38;2;%u;%u;%um", fg.r, fg.g, fg.b)) {
-                        free(out.data);
-                        return;
-                    }
-                    current_fg = fg;
-                    has_fg = true;
-                }
+                current_fg = fg;
+                has_fg = true;
             }
 
             if (!append_literal(&out, glyph)) {
@@ -523,15 +594,16 @@ static void draw_frame(const Pixel *buffer, int width, int height, int terminal_
                 return;
             }
         }
-
-        if ((has_fg || has_bg) && !append_literal(&out, "\033[0m")) {
-            free(out.data);
-            return;
-        }
     }
 
-    if (!append_output(&out, "\033[%d;1H\033[2K\033[38;2;210;216;230m %s | q to quit \033[0m",
-                       terminal_rows, mode)) {
+    previous_first_row = current_first_row;
+    previous_last_row = current_last_row;
+
+    (void)snprintf(status, sizeof(status), "%s | palette: %-7s | p palette | q quit",
+                   mode, current_palette->name);
+
+    if (!append_output(&out, "\033[%d;1H\033[40m\033[2K\033[38;2;210;216;230m %.*s",
+                       terminal_rows, status_width, status)) {
         free(out.data);
         return;
     }
@@ -540,7 +612,7 @@ static void draw_frame(const Pixel *buffer, int width, int height, int terminal_
     free(out.data);
 }
 
-static bool should_quit(void) {
+static bool handle_input(void) {
     char input[16];
     ssize_t count = read(STDIN_FILENO, input, sizeof(input));
 
@@ -554,6 +626,9 @@ static bool should_quit(void) {
     for (ssize_t i = 0; i < count; i++) {
         if (input[i] == 'q' || input[i] == 'Q' || input[i] == 3) {
             return true;
+        }
+        if (input[i] == 'p' || input[i] == 'P') {
+            next_palette();
         }
     }
 
@@ -579,6 +654,7 @@ int main(void) {
         return 1;
     }
 
+    current_palette = &palettes[0];
     start_time = monotonic_seconds();
 
     while (running) {
@@ -619,13 +695,14 @@ int main(void) {
         width = render_width;
         height = render_height;
 
+        if (handle_input()) {
+            running = 0;
+            continue;
+        }
+
         elapsed = (float)(monotonic_seconds() - start_time);
         render_cube(buffer, width, height, elapsed);
         draw_frame(buffer, width, height, terminal_width, terminal_rows, elapsed);
-
-        if (should_quit()) {
-            running = 0;
-        }
 
         nanosleep(&delay, NULL);
     }
