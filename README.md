@@ -52,7 +52,7 @@ RBrubik
 - Additional cube customization controls
 - Rendering and performance improvements
 
-To uninstall it:
+## Uninstall
 
 ```sh
 sudo make uninstall
