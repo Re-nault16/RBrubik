@@ -25,6 +25,8 @@ This release adds a palette switcher. Press `p` to alternate between the classic
 
 ## Installation
 
+No external dependencies are required.
+
 ```sh
 git clone https://github.com/Re-nault16/RBrubik.git
 cd RBrubik
@@ -45,6 +47,11 @@ RBrubik
 - `q`: quit
 - `p`: change palette
 - `Ctrl-C`: quit
+
+## Tested On
+
+- Arch Linux ARM aarch64
+- Kali Linux arm64
 
 ## Roadmap
 
