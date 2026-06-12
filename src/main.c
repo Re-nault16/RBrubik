@@ -5,6 +5,7 @@
 #include <math.h>
 #include <signal.h>
 #include <stdbool.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -41,6 +42,12 @@ typedef struct {
     Color color;
     bool filled;
 } Pixel;
+
+typedef struct {
+    char *data;
+    size_t length;
+    size_t capacity;
+} OutputBuffer;
 
 static volatile sig_atomic_t running = 1;
 static struct termios original_termios;
@@ -334,12 +341,98 @@ static int mini(int a, int b) {
     return a < b ? a : b;
 }
 
+static bool reserve_output(OutputBuffer *out, size_t additional) {
+    size_t required = out->length + additional + 1;
+    size_t capacity = out->capacity == 0 ? 4096 : out->capacity;
+    char *data;
+
+    if (required <= out->capacity) {
+        return true;
+    }
+
+    while (capacity < required) {
+        if (capacity > ((size_t)-1) / 2) {
+            return false;
+        }
+        capacity *= 2;
+    }
+
+    data = realloc(out->data, capacity);
+    if (data == NULL) {
+        return false;
+    }
+
+    out->data = data;
+    out->capacity = capacity;
+    return true;
+}
+
+static bool append_output(OutputBuffer *out, const char *format, ...) {
+    va_list args;
+    va_list copy;
+    int needed;
+
+    va_start(args, format);
+    va_copy(copy, args);
+    needed = vsnprintf(NULL, 0, format, copy);
+    va_end(copy);
+
+    if (needed < 0 || !reserve_output(out, (size_t)needed)) {
+        va_end(args);
+        return false;
+    }
+
+    vsnprintf(out->data + out->length, out->capacity - out->length, format, args);
+    va_end(args);
+    out->length += (size_t)needed;
+    return true;
+}
+
+static bool append_literal(OutputBuffer *out, const char *text) {
+    size_t length = strlen(text);
+
+    if (!reserve_output(out, length)) {
+        return false;
+    }
+
+    memcpy(out->data + out->length, text, length);
+    out->length += length;
+    out->data[out->length] = '\0';
+    return true;
+}
+
+static bool write_all(int fd, const char *data, size_t length) {
+    while (length > 0) {
+        ssize_t written = write(fd, data, length);
+
+        if (written < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            return false;
+        }
+        if (written == 0) {
+            return false;
+        }
+
+        data += written;
+        length -= (size_t)written;
+    }
+
+    return true;
+}
+
+static bool same_color(Color a, Color b) {
+    return a.r == b.r && a.g == b.g && a.b == b.b;
+}
+
 static void draw_frame(const Pixel *buffer, int width, int height, int terminal_width,
                        int terminal_rows, float t) {
     int frame_rows = (height + 1) / 2;
     int available_rows = terminal_rows > 1 ? terminal_rows - 1 : terminal_rows;
     int x_offset = (terminal_width - width) / 2;
     int y_offset = (available_rows - frame_rows) / 2;
+    OutputBuffer out = {0};
     float phase = fmodf(animation_time(t), CYCLE_SECONDS);
     const char *mode = t < STARTUP_SOLVED_SECONDS ? "solved" :
         phase < SCRAMBLE_SECONDS ? "scramble" : "solving";
@@ -352,32 +445,99 @@ static void draw_frame(const Pixel *buffer, int width, int height, int terminal_
     }
 
     for (int y = 0; y < height; y += 2) {
-        printf("\033[%d;%dH", y_offset + (y / 2) + 1, x_offset + 1);
+        bool has_fg = false;
+        bool has_bg = false;
+        Color current_fg = {0, 0, 0};
+        Color current_bg = {0, 0, 0};
+
+        if (!append_output(&out, "\033[%d;%dH", y_offset + (y / 2) + 1, x_offset + 1)) {
+            free(out.data);
+            return;
+        }
+
         for (int x = 0; x < width; x++) {
             const Pixel *upper = &buffer[y * width + x];
             const Pixel *lower = y + 1 < height ? &buffer[(y + 1) * width + x] : NULL;
             bool has_upper = upper->filled;
             bool has_lower = lower != NULL && lower->filled;
+            Color fg = {0, 0, 0};
+            Color bg = {0, 0, 0};
+            bool needs_fg = false;
+            bool needs_bg = false;
+            const char *glyph = " ";
 
             if (has_upper && has_lower) {
-                printf("\033[48;2;%u;%u;%um\033[38;2;%u;%u;%um▄",
-                       upper->color.r, upper->color.g, upper->color.b,
-                       lower->color.r, lower->color.g, lower->color.b);
+                bg = upper->color;
+                fg = lower->color;
+                needs_bg = true;
+                needs_fg = true;
+                glyph = "▄";
             } else if (has_upper) {
-                printf("\033[49m\033[38;2;%u;%u;%um▀",
-                       upper->color.r, upper->color.g, upper->color.b);
+                fg = upper->color;
+                needs_fg = true;
+                glyph = "▀";
             } else if (has_lower) {
-                printf("\033[49m\033[38;2;%u;%u;%um▄",
-                       lower->color.r, lower->color.g, lower->color.b);
+                fg = lower->color;
+                needs_fg = true;
+                glyph = "▄";
+            }
+
+            if (!needs_fg && !needs_bg) {
+                if ((has_fg || has_bg) && !append_literal(&out, "\033[0m")) {
+                    free(out.data);
+                    return;
+                }
+                has_fg = false;
+                has_bg = false;
             } else {
-                printf("\033[0m ");
+                if (needs_bg) {
+                    if (!has_bg || !same_color(current_bg, bg)) {
+                        if (!append_output(&out, "\033[48;2;%u;%u;%um",
+                                           bg.r, bg.g, bg.b)) {
+                            free(out.data);
+                            return;
+                        }
+                        current_bg = bg;
+                        has_bg = true;
+                    }
+                } else if (has_bg) {
+                    if (!append_literal(&out, "\033[49m")) {
+                        free(out.data);
+                        return;
+                    }
+                    has_bg = false;
+                }
+
+                if (needs_fg && (!has_fg || !same_color(current_fg, fg))) {
+                    if (!append_output(&out, "\033[38;2;%u;%u;%um", fg.r, fg.g, fg.b)) {
+                        free(out.data);
+                        return;
+                    }
+                    current_fg = fg;
+                    has_fg = true;
+                }
+            }
+
+            if (!append_literal(&out, glyph)) {
+                free(out.data);
+                return;
             }
         }
-        printf("\033[0m");
+
+        if ((has_fg || has_bg) && !append_literal(&out, "\033[0m")) {
+            free(out.data);
+            return;
+        }
     }
-    printf("\033[%d;1H\033[2K\033[38;2;210;216;230m %s | q to quit \033[0m",
-           terminal_rows, mode);
-    fflush(stdout);
+
+    if (!append_output(&out, "\033[%d;1H\033[2K\033[38;2;210;216;230m %s | q to quit \033[0m",
+                       terminal_rows, mode)) {
+        free(out.data);
+        return;
+    }
+
+    (void)write_all(STDOUT_FILENO, out.data, out.length);
+    free(out.data);
 }
 
 static bool should_quit(void) {
@@ -447,11 +607,11 @@ int main(void) {
             }
             buffer = new_buffer;
             buffer_size = required;
-            printf("\033[2J");
+            (void)write_all(STDOUT_FILENO, "\033[2J", 4);
         }
 
         if (terminal_width != previous_terminal_width || terminal_rows != previous_terminal_rows) {
-            printf("\033[2J");
+            (void)write_all(STDOUT_FILENO, "\033[2J", 4);
             previous_terminal_width = terminal_width;
             previous_terminal_rows = terminal_rows;
         }
