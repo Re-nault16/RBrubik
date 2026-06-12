@@ -46,6 +46,12 @@ RBrubik
 - `p`: change palette
 - `Ctrl-C`: quit
 
+## Roadmap
+
+- More palette options
+- Additional cube customization controls
+- Rendering and performance improvements
+
 To uninstall it:
 
 ```sh
